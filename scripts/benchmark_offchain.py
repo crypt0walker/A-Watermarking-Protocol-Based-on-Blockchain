@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import secrets
 import sys
 import time
 from pathlib import Path
@@ -22,6 +23,10 @@ from awpbb.protocol.mock_bc import MockBC, TxRecord
 from awpbb.wm import composite_embed
 from awpbb.wm import dct8x8
 from awpbb.wm import mapping
+
+# 检查是否启用 gmpy2 加速
+if not getattr(paillier, "_G", False):
+    print("[warn] 未检测到 gmpy2，加密/解密将使用纯 Python 大整数，耗时会明显增加。建议: pip install gmpy2")
 
 
 def _b64_int(x: int) -> bytes:
@@ -146,7 +151,8 @@ def main() -> None:
     if total_bits > available_bits:
         raise ValueError(f"容量不足: 需要 {total_bits} bit, 宿主仅 {available_bits} bit")
 
-    rng_bytes = _hash_bytes(b"WCP" + _b64_int(int(time.time() * 1e6)))
+    # 为 W_CP 生成足够的随机字节，长度按需求截取
+    rng_bytes = secrets.token_bytes((wm_len + 7) // 8)
     wcp_bits = [(rng_bytes[i // 8] >> (7 - (i % 8))) & 1 for i in range(wm_len)]
     nonce_bits = [(nonce >> (63 - i)) & 1 for i in range(64)]
     wm_bits = wcp_bits + nonce_bits
@@ -297,10 +303,10 @@ def main() -> None:
         print(f"{name}: {tval:.6f} [{role}]")
 
     # 1->n / 链式复用提示
-    print("\n[复用提示] 1->n 或链式场景可复用/可省的步骤：")
-    print(" - 密钥生成（Paillier/RSA）可多笔复用，不必每笔生成。")
-    print(" - 若宿主内容不变，图像加载+DCT+宿主系数 Paillier 加密可缓存；每个买家仅重新嵌入自己的 W_CP 与 nonce。")
-    print(" - BC 注册/确认、嵌入、解密/提取是每笔必做，无法省略。")
+    print("\n[复用提示]（严格遵循原文一次性 pk 设定）")
+    print(" - 每笔交易 RA 都要生成一次性 pk_RA^X / encN，BC 要检查未被使用；不同买家/交易的 Paillier 公钥不同。")
+    print(" - 因此宿主系数的 Paillier 密文不能跨买家复用，必须用该笔的 pk 重加密；可复用的只有明文侧：原图、DCT、嵌入位置模板。")
+    print(" - BC 注册/确认、嵌入、解密/提取每笔都要执行，无法省略。")
 
     if result["success"]:
         print(f"\n[成功] 水印与 nonce 提取验证通过，水印图像已保存至 {out_img_path}")

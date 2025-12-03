@@ -11,6 +11,14 @@ import secrets
 from dataclasses import dataclass
 from typing import Tuple
 
+try:  # gmpy2 提供 C 层大整数和快速模幂
+    import gmpy2
+
+    _G = True
+except Exception:
+    gmpy2 = None
+    _G = False
+
 
 # Miller–Rabin bases for deterministic checks up to 2^128; for larger key sizes
 # we still get strong probabilistic assurance with additional random bases.
@@ -19,6 +27,11 @@ _MR_BASES = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31]
 
 def _modinv(a: int, n: int) -> int:
     """Modular inverse using extended Euclid."""
+    if _G:
+        inv = gmpy2.invert(a, n)
+        if inv == 0:
+            raise ValueError("a is not invertible")
+        return int(inv)
     t, new_t = 0, 1
     r, new_r = n, a
     while new_r:
@@ -34,6 +47,9 @@ def _is_probable_prime(n: int, rounds: int = 10) -> bool:
     """Probabilistic Miller–Rabin primality test."""
     if n < 2:
         return False
+    if _G:
+        # gmpy2.is_prime 返回 0/1/2，>=1 即 probable prime
+        return gmpy2.is_prime(n) != 0
     small_primes = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
     for p in small_primes:
         if n == p:
@@ -120,7 +136,11 @@ def keygen(bits: int = 1024) -> Tuple[PaillierPublic, PaillierPrivate]:
     lam = _lcm(p - 1, q - 1)
     g = n + 1
     n2 = n * n
-    mu = _modinv(_L(pow(g, lam, n2), n), n)
+    if _G:
+        L_val = _L(int(gmpy2.powmod(g, lam, n2)), n)
+    else:
+        L_val = _L(pow(g, lam, n2), n)
+    mu = _modinv(L_val, n)
     return PaillierPublic(n=n, g=g), PaillierPrivate(lam=lam, mu=mu)
 
 
@@ -135,6 +155,10 @@ def enc(pub: PaillierPublic, m: int, r: int | None = None) -> int:
             if _gcd(r, pub.n) == 1:
                 break
     n2 = pub.n2
+    if _G:
+        part1 = gmpy2.powmod(pub.g, m, n2)
+        part2 = gmpy2.powmod(r, pub.n, n2)
+        return int((part1 * part2) % n2)
     return (pow(pub.g, m, n2) * pow(r, pub.n, n2)) % n2
 
 
@@ -143,8 +167,11 @@ def dec(pub: PaillierPublic, priv: PaillierPrivate, c: int) -> int:
     n2 = pub.n2
     if not (0 <= c < n2):
         raise ValueError("ciphertext out of range")
-    u = pow(c, priv.lam, n2)
-    return (_L(u, pub.n) * priv.mu) % pub.n
+    if _G:
+        u = gmpy2.powmod(c, priv.lam, n2)
+    else:
+        u = pow(c, priv.lam, n2)
+    return (_L(int(u), pub.n) * priv.mu) % pub.n
 
 
 def hom_add(pub: PaillierPublic, c1: int, c2: int) -> int:
@@ -154,13 +181,18 @@ def hom_add(pub: PaillierPublic, c1: int, c2: int) -> int:
 def hom_add_const(pub: PaillierPublic, c: int, k: int) -> int:
     # k can be negative; handle by using modular inverse
     if k >= 0:
+        if _G:
+            return int((c * gmpy2.powmod(pub.g, k, pub.n2)) % pub.n2)
         return (c * pow(pub.g, k, pub.n2)) % pub.n2
-    # for negative k, use g^{-k} = (g^{-1})^{|k|}
     g_inv = _modinv(pub.g % pub.n2, pub.n2)
+    if _G:
+        return int((c * gmpy2.powmod(g_inv, -k, pub.n2)) % pub.n2)
     return (c * pow(g_inv, -k, pub.n2)) % pub.n2
 
 
 def hom_mul_const(pub: PaillierPublic, c: int, k: int) -> int:
     if k < 0:
         raise ValueError("negative scalar not supported for hom_mul_const")
+    if _G:
+        return int(gmpy2.powmod(c, k, pub.n2))
     return pow(c, k, pub.n2)
