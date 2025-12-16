@@ -117,6 +117,19 @@ class PaillierPublic:
     def n2(self) -> int:
         return self.n * self.n
 
+    @property
+    def _n_mpz(self):
+        if not _G:
+            return None
+        return gmpy2.mpz(self.n)
+
+    @property
+    def _n2_mpz(self):
+        if not _G:
+            return None
+        n = gmpy2.mpz(self.n)
+        return n * n
+
 
 @dataclass
 class PaillierPrivate:
@@ -134,13 +147,10 @@ def keygen(bits: int = 1024) -> Tuple[PaillierPublic, PaillierPrivate]:
         q = _rand_prime(bits // 2)
     n = p * q
     lam = _lcm(p - 1, q - 1)
+    # Use the standard fast generator g = n + 1 (Paillier with g=n+1).
+    # For this choice, g^λ mod n^2 = 1 + λ·n, so L(g^λ mod n^2) = λ.
     g = n + 1
-    n2 = n * n
-    if _G:
-        L_val = _L(int(gmpy2.powmod(g, lam, n2)), n)
-    else:
-        L_val = _L(pow(g, lam, n2), n)
-    mu = _modinv(L_val, n)
+    mu = _modinv(lam % n, n)
     return PaillierPublic(n=n, g=g), PaillierPrivate(lam=lam, mu=mu)
 
 
@@ -154,12 +164,17 @@ def enc(pub: PaillierPublic, m: int, r: int | None = None) -> int:
             r = secrets.randbelow(pub.n - 1) + 1
             if _gcd(r, pub.n) == 1:
                 break
-    n2 = pub.n2
+    # With g = n+1, g^m mod n^2 = 1 + m*n (mod n^2).
     if _G:
-        part1 = gmpy2.powmod(pub.g, m, n2)
-        part2 = gmpy2.powmod(r, pub.n, n2)
+        n = pub._n_mpz
+        n2 = pub._n2_mpz
+        part1 = (gmpy2.mpz(1) + gmpy2.mpz(m) * n) % n2
+        part2 = gmpy2.powmod(gmpy2.mpz(r), n, n2)
         return int((part1 * part2) % n2)
-    return (pow(pub.g, m, n2) * pow(r, pub.n, n2)) % n2
+    n2 = pub.n2
+    part1 = (1 + m * pub.n) % n2
+    part2 = pow(r, pub.n, n2)
+    return (part1 * part2) % n2
 
 
 def dec(pub: PaillierPublic, priv: PaillierPrivate, c: int) -> int:
@@ -168,7 +183,8 @@ def dec(pub: PaillierPublic, priv: PaillierPrivate, c: int) -> int:
     if not (0 <= c < n2):
         raise ValueError("ciphertext out of range")
     if _G:
-        u = gmpy2.powmod(c, priv.lam, n2)
+        n2_mpz = pub._n2_mpz
+        u = gmpy2.powmod(gmpy2.mpz(c), gmpy2.mpz(priv.lam), n2_mpz)
     else:
         u = pow(c, priv.lam, n2)
     return (_L(int(u), pub.n) * priv.mu) % pub.n
@@ -179,15 +195,17 @@ def hom_add(pub: PaillierPublic, c1: int, c2: int) -> int:
 
 
 def hom_add_const(pub: PaillierPublic, c: int, k: int) -> int:
-    # k can be negative; handle by using modular inverse
-    if k >= 0:
-        if _G:
-            return int((c * gmpy2.powmod(pub.g, k, pub.n2)) % pub.n2)
-        return (c * pow(pub.g, k, pub.n2)) % pub.n2
-    g_inv = _modinv(pub.g % pub.n2, pub.n2)
+    # For g = n+1, g^k mod n^2 = 1 + (k mod n)*n. This works for negative k as well
+    # because plaintext space is modulo n.
+    k_mod = k % pub.n
     if _G:
-        return int((c * gmpy2.powmod(g_inv, -k, pub.n2)) % pub.n2)
-    return (c * pow(g_inv, -k, pub.n2)) % pub.n2
+        n = pub._n_mpz
+        n2 = pub._n2_mpz
+        gk = (gmpy2.mpz(1) + gmpy2.mpz(k_mod) * n) % n2
+        return int((gmpy2.mpz(c) * gk) % n2)
+    n2 = pub.n2
+    gk = (1 + k_mod * pub.n) % n2
+    return (c * gk) % n2
 
 
 def hom_mul_const(pub: PaillierPublic, c: int, k: int) -> int:

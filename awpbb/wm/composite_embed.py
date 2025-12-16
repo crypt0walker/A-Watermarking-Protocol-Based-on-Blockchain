@@ -8,14 +8,18 @@ from awpbb.crypto.paillier import PaillierPublic, hom_add_const
 
 
 def qim_embed_int(x: int, bit: int, delta: int) -> int:
-    q = x // delta
-    base = 2 * q * delta
+    # 标准标量 QIM：两个余类相差 delta，量化步长为 2*delta，使用“就近”量化以最小化失真
+    step = 2 * delta
+    # x 为非负整数时可用整数舍入：round(x/step) = floor((x+step/2)/step)
+    q = (x + (step // 2)) // step
+    base = q * step
     return base if bit == 0 else base + delta
 
 
 def qim_extract_int(x_bar: int, delta: int) -> int:
-    q = x_bar // delta
-    return q % 2
+    # 判决：对 delta 格点就近取整后看奇偶
+    q = (x_bar + (delta // 2)) // delta
+    return int(q % 2)
 
 
 def distribute_delta(alpha: List[int], dy: int) -> List[int]:

@@ -3,11 +3,23 @@
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 from typing import Tuple
 
 import numpy as np
 from PIL import Image
+
+try:
+    import cv2
+
+    _HAS_CV2 = True
+except Exception:
+    cv2 = None
+    _HAS_CV2 = False
+
+# 环境变量 AWPBB_DCT_USE_OPENCV=0 可以关闭 cv2 路径，回退到纯矩阵实现
+_USE_OPENCV = _HAS_CV2 and os.environ.get("AWPBB_DCT_USE_OPENCV", "1") != "0"
 
 
 def load_grayscale(path: str | Path, size: Tuple[int, int] | None = None) -> np.ndarray:
@@ -64,8 +76,12 @@ _Tt = _T.T
 
 
 def dct_block(block: np.ndarray) -> np.ndarray:
+    if _USE_OPENCV:
+        return cv2.dct(block.astype(np.float64))
     return _T @ block @ _Tt
 
 
 def idct_block(block: np.ndarray) -> np.ndarray:
+    if _USE_OPENCV:
+        return cv2.idct(block.astype(np.float64))
     return _Tt @ block @ _T

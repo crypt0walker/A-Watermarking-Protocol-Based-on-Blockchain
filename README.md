@@ -5,33 +5,31 @@ Python 实验脚本，复现 Frattolillo 协议核心（Paillier + 8×8 DCT + �
 ## 快速使用
 
 ```bash
-# 安装依赖（需要 numpy + pillow）
-pip install numpy pillow
+# 安装依赖（推荐 gmpy2 + opencv 以加速 Paillier 与 DCT）
+python3 -m pip install --user numpy pillow gmpy2 opencv-python
 
-# 单次交易基准，默认读取 ./lenna.jpg，缩放 256x256，水印 64 bit（另加 64 bit nonce）
-python scripts/benchmark_offchain.py \
-  --image lenna.jpg \
-  --size 256 \
-  --wm-bits 64 \
-  --paillier-bits 1024 \
-  --delta 32 \
-  --save-watermarked  # 可选，输出 watermarked.png
+# 单次交易基准（交互式输入）：图像路径、边长、水印长度、QIM 步长 s、纹理分位数
+python3 scripts/benchmark_offchain.py
 ```
 
-输出 JSON，包含各端耗时（秒）：
+## 官方模拟实验（Excel + Fig1/2/3）
 
-- `RA_keygen_paillier` / `RA_keygen_rsa` / `RA_issue`
-- `CP_keygen_rsa` / `CP_encrypt` / `CP_embed` / `CP_sign` / `CP_bc_register`
-- `B_bc_confirm` / `B_decrypt` / `B_reconstruct`
-- `J_extract` / `RA_decrypt_nonce`
-- 以及 `success` 标记（提取 nonce 与 RA 解密一致）。
+`scripts/official_simulation.py` 会先跑少量 `256×256` 的真实基准（3 次均值）标定单位开销，再按主要 `O(size^2)` 尺度外推并加入小随机扰动，生成 *SIMULATED/PREDICTED* 的三组实验表与图：
 
-CLI 参数可动态调整图像尺寸与水印长度：
-- `--size N`：将输入图缩放为 N×N，默认 256。
-- `--wm-bits K`：W_CP 长度（bit），最终嵌入长度为 `K + 64`（附加 nonce）。
-- `--delta` / `--alpha`：QIM 步长、复合权重。
+```bash
+python3 scripts/official_simulation.py
+```
+
+输出：
+- `artifacts/experiments_AWPBB.xlsx`
+- `artifacts/fig1.png`
+- `artifacts/fig2.png`
+- `artifacts/fig3_cp.png`
+- `artifacts/fig3_cloud.png`
+
+`scripts/benchmark_offchain.py` 会输出中文阶段日志并在末尾打印 JSON（含 `timings_sec` 与 `role_totals_sec`），同时保存水印图 `watermarked.png` 并从文件回读提取进行自校验（BER/NC/PSNR）。
 
 ## 1-to-n 与链式场景的复用说明
-- 可复用部分：Paillier 密钥生成/加解密、DCT 处理、严格 composite 嵌入/提取、签名/验签、mock BC/合约接口。
-- 随 n 线性增长的部分：Paillier 加密/解密次数、复合嵌入次数、签名/验签次数、BC 注册/确认调用。
-- 链式扩展：按链长度重复 CP→B→RA→BC 的相同流水，各阶段计时可在 `benchmark_offchain.py` 内循环 n 次累积或分摊；合约 `WatermarkProtocol.sol` 可直接用于 anvil 部署，对应调用替换 mock BC 部分。
+- 严格遵循原文“一次性 pk_RA^X”：不同买家/交易必须重新生成 Paillier 密钥并用该 pk 重加密宿主系数，密文宿主不可跨用户复用。
+- 可复用（只需一次）：原图读取/缩放、8×8 分块/DCT、嵌入位置模板（明文侧预处理）。
+- 随用户数 n 线性增长：RA 密钥与 token、CP 宿主加密与嵌入、买家解密、链上/链下注册确认、仲裁提取。
